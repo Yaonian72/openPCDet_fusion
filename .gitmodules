@@ -1,0 +1,3 @@
+[submodule "pcdet/ops/spconv"]
+	path = pcdet/ops/spconv
+	url = https://github.com/traveller59/spconv.git
