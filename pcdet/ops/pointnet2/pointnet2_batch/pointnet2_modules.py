@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from . import pointnet2_utils
+from . import pointnet2_sampler
 
 
 class _PointnetSAModuleBase(nn.Module):
@@ -97,6 +98,91 @@ class PointnetSAModuleMSG(_PointnetSAModuleBase):
             self.mlps.append(nn.Sequential(*shared_mlps))
 
         self.pool_method = pool_method
+
+
+class PointnetSAModuleMSG_FPS(_PointnetSAModuleBase):
+
+    def __init__(self, *,
+                 npoint: int,
+                 radii: List[float],
+                 nsamples: List[int],
+                 mlps: List[List[int]],
+                 fps_mod: List[str] = ['D-FPS'],
+                 fps_sample_range_list: List[int] = [-1],
+                 dilated_group: bool = False,
+                 bn: bool = True,
+                 use_xyz: bool = True,
+                 pool_method='max_pool'):
+
+        super().__init__()
+
+        assert len(radii) == len(nsamples) == len(mlps)
+
+        self.npoint = npoint
+        self.groupers = nn.ModuleList()
+        self.mlps = nn.ModuleList()
+        self.fps_mod_list = fps_mod
+        self.fps_sample_range_list = fps_sample_range_list
+
+        self.points_sampler = pointnet2_sampler.Points_Sampler(self.npoint, self.fps_mod_list,
+                                                               self.fps_sample_range_list)
+
+        for i in range(len(radii)):
+            radius = radii[i]
+            nsample = nsamples[i]
+            if dilated_group and i != 0:
+                min_radius = radii[i - 1]
+            else:
+                min_radius = 0
+            self.groupers.append(
+                pointnet2_utils.QueryAndGroup(radius, nsample, use_xyz=use_xyz, min_radius=min_radius)
+                if npoint is not None else pointnet2_utils.GroupAll(use_xyz)
+            )
+
+            mlp_spec = mlps[i]
+            if use_xyz:
+                mlp_spec[0] += 3
+            print(mlp_spec)
+            shared_mlps = []
+            for k in range(len(mlp_spec) - 1):
+                shared_mlps.extend([
+                    nn.Conv2d(mlp_spec[k], mlp_spec[k + 1], kernel_size=1, bias=False),
+                    nn.BatchNorm2d(mlp_spec[k + 1]),
+                    nn.ReLU()
+                ])
+            self.mlps.append(nn.Sequential(*shared_mlps))
+        self.pool_method = pool_method
+
+    def forward(self, xyz: torch.Tensor, features: torch.Tensor = None, new_xyz=None) -> (torch.Tensor, torch.Tensor):
+        new_features_list = []
+
+        xyz_flipped = xyz.transpose(1, 2).contiguous()
+
+        if new_xyz is None:
+            new_xyz = pointnet2_utils.gather_operation(
+                xyz_flipped,
+                self.points_sampler(xyz, features)
+            ).transpose(1, 2).contiguous() if self.npoint is not None else None
+
+        for i in range(len(self.groupers)):
+            new_features = self.groupers[i](xyz, new_xyz, features)  # (B, C, npoint, nsample)
+
+            new_features = self.mlps[i](new_features)  # (B, mlp[-1], npoint, nsample)
+            if self.pool_method == 'max_pool':
+                new_features = F.max_pool2d(
+                    new_features, kernel_size=[1, new_features.size(3)]
+                )  # (B, mlp[-1], npoint, 1)
+            elif self.pool_method == 'avg_pool':
+                new_features = F.avg_pool2d(
+                    new_features, kernel_size=[1, new_features.size(3)]
+                )  # (B, mlp[-1], npoint, 1)
+            else:
+                raise NotImplementedError
+
+            new_features = new_features.squeeze(-1)  # (B, mlp[-1], npoint)
+            new_features_list.append(new_features)
+
+        return new_xyz, torch.cat(new_features_list, dim=1)
 
 
 class PointnetSAModule(PointnetSAModuleMSG):

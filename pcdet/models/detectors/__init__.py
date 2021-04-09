@@ -4,6 +4,7 @@ from .point_rcnn import PointRCNN
 from .pointpillar import PointPillar
 from .pv_rcnn import PVRCNN
 from .second_net import SECONDNet
+from .ssd3d import SSD3D
 
 __all__ = {
     'Detector3DTemplate': Detector3DTemplate,
@@ -17,6 +18,7 @@ __all__ = {
 
 
 def build_detector(model_cfg, num_class, dataset):
+    print(__all__)
     model = __all__[model_cfg.NAME](
         model_cfg=model_cfg, num_class=num_class, dataset=dataset
     )

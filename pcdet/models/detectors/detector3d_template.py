@@ -44,6 +44,7 @@ class Detector3DTemplate(nn.Module):
             module, model_info_dict = getattr(self, 'build_%s' % module_name)(
                 model_info_dict=model_info_dict
             )
+            print(model_info_dict.keys())
             self.add_module(module_name, module)
         return model_info_dict['module_list']
 
@@ -104,16 +105,21 @@ class Detector3DTemplate(nn.Module):
         if self.model_cfg.get('PFE', None) is None:
             return None, model_info_dict
 
-        pfe_module = pfe.__all__[self.model_cfg.PFE.NAME](
-            model_cfg=self.model_cfg.PFE,
-            voxel_size=model_info_dict['voxel_size'],
-            point_cloud_range=model_info_dict['point_cloud_range'],
-            num_bev_features=model_info_dict['num_bev_features'],
-            num_rawpoint_features=model_info_dict['num_rawpoint_features']
-        )
+        try:
+            pfe_module = pfe.__all__[self.model_cfg.PFE.NAME](
+                model_cfg=self.model_cfg.PFE,
+                voxel_size=model_info_dict['voxel_size'],
+                point_cloud_range=model_info_dict['point_cloud_range'],
+                num_bev_features=model_info_dict['num_bev_features'],
+                num_rawpoint_features=model_info_dict['num_rawpoint_features']
+            )
+        except:
+            pfe_module = pfe.__all__[self.model_cfg.PFE.NAME](
+                model_cfg=self.model_cfg.PFE,
+            )
         model_info_dict['module_list'].append(pfe_module)
-        model_info_dict['num_point_features'] = pfe_module.num_point_features
-        model_info_dict['num_point_features_before_fusion'] = pfe_module.num_point_features_before_fusion
+        model_info_dict['num_point_features'] = -1
+        model_info_dict['num_point_features_before_fusion'] = -1
         return pfe_module, model_info_dict
 
     def build_dense_head(self, model_info_dict):

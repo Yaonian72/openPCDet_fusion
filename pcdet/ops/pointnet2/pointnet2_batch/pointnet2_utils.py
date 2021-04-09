@@ -36,6 +36,40 @@ class FurthestPointSampling(Function):
 furthest_point_sample = FurthestPointSampling.apply
 
 
+class FurthestPointSamplingWithDist(Function):
+    """Furthest Point Sampling With Distance.
+    Uses iterative furthest point sampling to select a set of features whose
+    corresponding points have the furthest distance.
+    """
+
+    @staticmethod
+    def forward(ctx, points_dist: torch.Tensor,
+                num_points: int) -> torch.Tensor:
+        """forward.
+        Args:
+            points_dist (Tensor): (B, N, N) Distance between each point pair.
+            num_points (int): Number of points in the sampled set.
+        Returns:
+             Tensor: (B, num_points) indices of the sampled points.
+        """
+        assert points_dist.is_contiguous()
+
+        B, N, _ = points_dist.size()
+        output = points_dist.new_zeros([B, num_points], dtype=torch.int32)
+        temp = points_dist.new_zeros([B, N]).fill_(1e10)
+
+        pointnet2.furthest_point_sampling_with_dist_wrapper(
+            B, N, num_points, points_dist, temp, output)
+        ctx.mark_non_differentiable(output)
+        return output
+
+    @staticmethod
+    def backward(xyz, a=None):
+        return None, None
+
+furthest_point_sample_with_dist = FurthestPointSamplingWithDist.apply
+
+
 class GatherOperation(Function):
 
     @staticmethod
@@ -197,27 +231,37 @@ class GroupingOperation(Function):
 grouping_operation = GroupingOperation.apply
 
 
+
 class BallQuery(Function):
+    """Ball Query.
+    Find nearby points in spherical space.
+    """
 
     @staticmethod
-    def forward(ctx, radius: float, nsample: int, xyz: torch.Tensor, new_xyz: torch.Tensor) -> torch.Tensor:
+    def forward(ctx, min_radius: float, max_radius: float, sample_num: int,
+                xyz: torch.Tensor, center_xyz: torch.Tensor) -> torch.Tensor:
+        """forward.
+        Args:
+            min_radius (float): minimum radius of the balls.
+            max_radius (float): maximum radius of the balls.
+            sample_num (int): maximum number of features in the balls.
+            xyz (Tensor): (B, N, 3) xyz coordinates of the features.
+            center_xyz (Tensor): (B, npoint, 3) centers of the ball query.
+        Returns:
+            Tensor: (B, npoint, nsample) tensor with the indicies of
+                the features that form the query balls.
         """
-        :param ctx:
-        :param radius: float, radius of the balls
-        :param nsample: int, maximum number of features in the balls
-        :param xyz: (B, N, 3) xyz coordinates of the features
-        :param new_xyz: (B, npoint, 3) centers of the ball query
-        :return:
-            idx: (B, npoint, nsample) tensor with the indicies of the features that form the query balls
-        """
-        assert new_xyz.is_contiguous()
+        assert center_xyz.is_contiguous()
         assert xyz.is_contiguous()
+        assert min_radius < max_radius
 
         B, N, _ = xyz.size()
-        npoint = new_xyz.size(1)
-        idx = torch.cuda.IntTensor(B, npoint, nsample).zero_()
+        npoint = center_xyz.size(1)
+        idx = torch.cuda.IntTensor(B, npoint, sample_num).zero_()
 
-        pointnet2.ball_query_wrapper(B, N, npoint, radius, nsample, new_xyz, xyz, idx)
+        pointnet2.ball_query_wrapper(B, N, npoint, min_radius, max_radius,
+                                          sample_num, center_xyz, xyz, idx)
+        ctx.mark_non_differentiable(idx)
         return idx
 
     @staticmethod
@@ -229,14 +273,14 @@ ball_query = BallQuery.apply
 
 
 class QueryAndGroup(nn.Module):
-    def __init__(self, radius: float, nsample: int, use_xyz: bool = True):
+    def __init__(self, max_radius, nsample, min_radius=0, use_xyz=True,):
         """
         :param radius: float, radius of ball
         :param nsample: int, maximum number of features to gather in the ball
         :param use_xyz:
         """
         super().__init__()
-        self.radius, self.nsample, self.use_xyz = radius, nsample, use_xyz
+        self.max_radius, self.min_radius, self.nsample, self.use_xyz = max_radius, min_radius, nsample, use_xyz
 
     def forward(self, xyz: torch.Tensor, new_xyz: torch.Tensor, features: torch.Tensor = None) -> Tuple[torch.Tensor]:
         """
@@ -246,7 +290,7 @@ class QueryAndGroup(nn.Module):
         :return:
             new_features: (B, 3 + C, npoint, nsample)
         """
-        idx = ball_query(self.radius, self.nsample, xyz, new_xyz)
+        idx = ball_query(self.min_radius, self.max_radius, self.nsample, xyz, new_xyz)
         xyz_trans = xyz.transpose(1, 2).contiguous()
         grouped_xyz = grouping_operation(xyz_trans, idx)  # (B, 3, npoint, nsample)
         grouped_xyz -= new_xyz.transpose(1, 2).unsqueeze(-1)
