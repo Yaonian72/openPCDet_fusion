@@ -14,7 +14,7 @@ from torchvision import transforms
 class Painter:
     def __init__(self):
         self.root_split_path = "../../../data/kitti/training/"
-        self.save_path = "/home/yzy/PycharmProjects/OpenPCDet/data/kitti/training/velodyne_painted_mono_color/"
+        self.save_path = "/root/ynli/openPCDet_fusion/data/kitti/training/velodyne_painted_mono_color/"
         self.model = torch.hub.load('pytorch/vision:v0.8.0', 'deeplabv3_resnet101', pretrained=True)
         self.model.eval()
         if torch.cuda.is_available():
